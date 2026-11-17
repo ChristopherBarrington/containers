@@ -1,0 +1,83 @@
+name: Extend an existing image
+description: Add an image built on top of another Docker image, for example Bioconductor with extra R packages.
+title: 'Extend an image: '
+labels:
+  - add-image
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for an image that starts from another published image instead of a conda environment. When this issue is opened, a workflow pins the base image by digest, writes the Dockerfile on a new branch, opens a pull request and builds and validates the image. Merging the pull request publishes it. See [CONTRIBUTING.md](https://github.com/ChristopherBarrington/containers/blob/main/.github/CONTRIBUTING.md) for the conventions.
+
+  - type: input
+    id: tool
+    attributes:
+      label: Tool
+      description: The name to publish the image under, with the capitalisation used by its authors, for example R. An existing tool is found whatever the capitalisation.
+      placeholder: R
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version of the main software in the image, for example the R version. If an image already exists for this version, a rebuild (`--1`, `--2` and so on) is created instead.
+      placeholder: 4.6.1
+    validations:
+      required: true
+
+  - type: input
+    id: base
+    attributes:
+      label: Base image
+      description: The image to start from, with its tag. It is pinned to the digest the tag points to now, so later changes to the tag do not change this image.
+      placeholder: bioconductor/bioconductor_docker:3.23-r-4.6.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: instructions
+    attributes:
+      label: Dockerfile instructions
+      description: Instructions to add after the FROM line, for example RUN or ENV. Do not include FROM. Pin the versions of anything installed, so a rebuild gets the same software.
+      placeholder: RUN Rscript -e 'install.packages("renv", repos = "https://packagemanager.posit.co/cran/2026-11-17")'
+      render: dockerfile
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation commands
+      description: Bash commands run inside the built image; if any fails, the image is not published. Optional, but without them the image is published unchecked.
+      placeholder: Rscript -e 'stopifnot(getRversion() == "4.6.1"); library(renv)'
+
+  - type: markdown
+    attributes:
+      value: |
+        ### For a new tool only
+
+        The fields below are used to write the tool's README. Leave them empty when adding a version or rebuild of a tool that already has images.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: One or two sentences on what the image provides.
+
+  - type: input
+    id: documentation
+    attributes:
+      label: Documentation URL
+      placeholder: https://www.bioconductor.org/help/docker/
+
+  - type: input
+    id: source
+    attributes:
+      label: Source repository URL
+      placeholder: https://github.com/Bioconductor/bioconductor_docker
+
+  - type: textarea
+    id: citation
+    attributes:
+      label: Citation
+      description: The publications to cite, with their DOIs as links.

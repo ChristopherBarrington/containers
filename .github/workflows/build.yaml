@@ -1,0 +1,129 @@
+name: build
+
+# Pull requests: build and validate changed images, and check their tags are not already published.
+# Pushes to main: the same, then push the images to GHCR.
+# Manual run: build and validate one named image directory; it is published only when run on main.
+# The add-image workflow uses a manual run to build the branch it creates, because a pull request
+# opened with the workflow token does not trigger this workflow.
+
+on:
+  pull_request:
+    paths:
+      - images/**
+  push:
+    branches:
+      - main
+    paths:
+      - images/**
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image directory, for example images/SAMtools/1.21
+        required: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    outputs:
+      images: ${{ steps.changed.outputs.images }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: changed
+        name: Find changed images
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_IMAGE: ${{ inputs.image }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case "${EVENT}" in
+            workflow_dispatch) images=$(jq --null-input --compact-output --arg d "${INPUT_IMAGE%/}" '[$d]') ;;
+            pull_request)      images=$(.github/scripts/changed-images.sh "${PR_BASE}" HEAD) ;;
+            push)              images=$(.github/scripts/changed-images.sh "${PUSH_BEFORE}" HEAD) ;;
+          esac
+          echo "[INFO] images: ${images}"
+          echo "images=${images}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.images != '[]'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.detect.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: tag
+        name: Work out the image tag
+        env:
+          IMAGE_DIR: ${{ matrix.image }}
+        run: |
+          if [[ ! ${IMAGE_DIR} =~ ^images/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "[ERROR] not an image directory: ${IMAGE_DIR}"
+            exit 1
+          fi
+          name=$(.github/scripts/image-tag.sh "${IMAGE_DIR}")
+          echo "[INFO] image: ${name}"
+          echo "name=${name}" >> "${GITHUB_OUTPUT}"
+          echo "tool=$(basename "$(dirname "${IMAGE_DIR}")")" >> "${GITHUB_OUTPUT}"
+          echo "version=$(.github/scripts/image-tag.sh --version "${IMAGE_DIR}")" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite a published tag
+        env:
+          IMAGE_NAME: ${{ steps.tag.outputs.name }}
+          IMAGE_DIR: ${{ matrix.image }}
+        run: |
+          if docker manifest inspect "${IMAGE_NAME}" > /dev/null 2>&1; then
+            echo "[ERROR] ${IMAGE_NAME} is already published and tags are never reused."
+            echo "[ERROR] Published image directories are never changed. To rebuild, copy ${IMAGE_DIR} to a new directory with the next --<n> suffix."
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.image }}
+          platforms: linux/amd64
+          load: true
+          tags: ${{ steps.tag.outputs.name }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.documentation=${{ github.server_url }}/${{ github.repository }}/blob/main/images/${{ steps.tag.outputs.tool }}/README.md
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp || github.event.pull_request.updated_at }}
+            org.opencontainers.image.title=${{ steps.tag.outputs.tool }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
+            org.opencontainers.image.description=${{ steps.tag.outputs.tool }} ${{ steps.tag.outputs.version }}
+
+      - name: Validate image
+        if: hashFiles(format('{0}/validate-image.sh', matrix.image)) != ''
+        env:
+          IMAGE_NAME: ${{ steps.tag.outputs.name }}
+          IMAGE_DIR: ${{ matrix.image }}
+        run: |
+          docker run --rm \
+            --volume "${PWD}/${IMAGE_DIR}/validate-image.sh:/validate-image.sh:ro" \
+            --entrypoint bash \
+            "${IMAGE_NAME}" /validate-image.sh
+
+      - name: Push
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE_NAME: ${{ steps.tag.outputs.name }}
+        run: docker push "${IMAGE_NAME}"

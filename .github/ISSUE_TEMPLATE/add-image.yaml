@@ -1,0 +1,76 @@
+name: Add an image
+description: Add a tool installed from conda packages, as a new tool, a new version or a rebuild of an existing version.
+title: 'Add an image: '
+labels:
+  - add-image
+body:
+  - type: markdown
+    attributes:
+      value: |
+        When this issue is opened, a workflow creates the image directory on a new branch, opens a pull request and builds and validates the image. Merging the pull request publishes it. See [CONTRIBUTING.md](https://github.com/ChristopherBarrington/containers/blob/main/.github/CONTRIBUTING.md) for the conventions.
+
+  - type: input
+    id: tool
+    attributes:
+      label: Tool
+      description: The tool's name, with the capitalisation used in its original publication, for example SAMtools or BWA. An existing tool is found whatever the capitalisation.
+      placeholder: SAMtools
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The tool's own version. If an image already exists for this version, a rebuild (`--1`, `--2` and so on) is created instead.
+      placeholder: '1.22'
+    validations:
+      required: true
+
+  - type: textarea
+    id: packages
+    attributes:
+      label: Conda packages
+      description: One conda package per line, with its channel and exact version. The channels conda-forge, bioconda and nodefaults are used.
+      placeholder: bioconda::samtools=1.22
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation commands
+      description: Bash commands run inside the built image; if any fails, the image is not published. Run the tool and check its version, and check every package the image is for. Optional, but without them the image is published unchecked.
+      placeholder: samtools --version | grep --quiet "samtools 1.22"
+
+  - type: markdown
+    attributes:
+      value: |
+        ### For a new tool only
+
+        The fields below are used to write the tool's README. Leave them empty when adding a version or rebuild of a tool that already has images.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: One or two sentences on what the tool does.
+
+  - type: input
+    id: documentation
+    attributes:
+      label: Documentation URL
+      placeholder: https://www.htslib.org/doc/samtools.html
+
+  - type: input
+    id: source
+    attributes:
+      label: Source repository URL
+      placeholder: https://github.com/samtools/samtools
+
+  - type: textarea
+    id: citation
+    attributes:
+      label: Citation
+      description: The publication to cite, with its DOI as a link.
+      placeholder: Li H, Handsaker B, Wysoker A, et al. The Sequence Alignment/Map format and SAMtools. *Bioinformatics* 25(16):2078–2079 (2009). [doi:10.1093/bioinformatics/btp352](https://doi.org/10.1093/bioinformatics/btp352)

@@ -1,0 +1,139 @@
+name: add-image
+
+# Turn an 'Add an image' or 'Extend an existing image' issue into a branch and pull request, then build and validate the image.
+# Runs when the add-image label is added: the issue form adds it when the issue is opened, and it can
+# be removed and added again to retry. Acts only for people with triage access or above.
+# Merging the pull request publishes the image through the build workflow.
+
+on:
+  issues:
+    types:
+      - labeled
+
+concurrency:
+  group: add-image-${{ github.event.issue.number }}
+
+jobs:
+  create:
+    if: github.event.label.name == 'add-image'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE: ${{ github.event.issue.number }}
+    steps:
+      - name: Check the requester can add images
+        env:
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          permission=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${SENDER}/permission" --jq .permission || echo none)
+          case ${permission} in
+            admin|maintain|write|triage)
+              echo "[INFO] ${SENDER} has ${permission} access" ;;
+            *)
+              echo "[ERROR] ${SENDER} has ${permission} access; triage or above is needed to add images"
+              exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - id: branch
+        name: Check for an earlier run
+        run: |
+          branch="add-image/issue-${ISSUE}"
+          echo "name=${branch}" >> "${GITHUB_OUTPUT}"
+          if git ls-remote --exit-code --heads origin "${branch}" > /dev/null; then
+            echo "[WARN] ${branch} already exists, so this issue has already been turned into a pull request"
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - id: generate
+        name: Create the image directory
+        if: steps.branch.outputs.exists != 'true'
+        run: |
+          if ! python3 .github/scripts/new-image.py --issue "${GITHUB_EVENT_PATH}" 2> "${RUNNER_TEMP}/error.txt"; then
+            cat "${RUNNER_TEMP}/error.txt"
+            exit 1
+          fi
+
+      - name: Commit to a new branch
+        if: steps.branch.outputs.exists != 'true'
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          TOOL: ${{ steps.generate.outputs.tool }}
+          TAG: ${{ steps.generate.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898210+github-actions[bot]@users.noreply.github.com'
+          git switch --create "${BRANCH}"
+          git add --all
+          git commit --message "Add ${TOOL} ${TAG}" --message "Requested in #${ISSUE}."
+          git push --set-upstream origin "${BRANCH}"
+
+      - id: pr
+        name: Open a pull request
+        if: steps.branch.outputs.exists != 'true'
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          TOOL: ${{ steps.generate.outputs.tool }}
+          TAG: ${{ steps.generate.outputs.tag }}
+          IMAGE: ${{ steps.generate.outputs.image }}
+          DIR: ${{ steps.generate.outputs.dir }}
+          VALIDATED: ${{ steps.generate.outputs.validated }}
+          BASE: ${{ steps.generate.outputs.base }}
+        run: |
+          source="It installs the conda environment in \`environment.yaml\`."
+          if [[ -n ${BASE} ]]; then
+            source="It extends \`${BASE}\`, pinned by digest."
+          fi
+          if [[ ${VALIDATED} == true ]]; then
+            check="The build runs \`validate-image.sh\` inside the image before it can be published."
+          else
+            check="> [!WARNING]
+          > No validation commands were given, so there is no \`validate-image.sh\` and the image will be published unchecked."
+          fi
+          body="Adds \`${IMAGE}\` from \`${DIR}\`. ${source} Closes #${ISSUE}.
+
+          ${check}
+
+          The add-image workflow started a build of this branch; its result is in the Actions tab. Merging publishes the image.
+
+          The build on this pull request waits for approval, because the pull request was opened by a workflow: approve it under the Checks section, or push a change to this branch."
+          url=$(gh pr create --base main --head "${BRANCH}" --title "Add ${TOOL} ${TAG}" --body "${body}")
+          echo "[INFO] opened ${url}"
+          echo "url=${url}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and validate the branch
+        if: steps.branch.outputs.exists != 'true'
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          DIR: ${{ steps.generate.outputs.dir }}
+        run: gh workflow run build.yaml --ref "${BRANCH}" --field image="${DIR}"
+
+      - name: Report on the issue
+        if: steps.branch.outputs.exists != 'true'
+        env:
+          URL: ${{ steps.pr.outputs.url }}
+          IMAGE: ${{ steps.generate.outputs.image }}
+        run: |
+          gh issue comment "${ISSUE}" --body "Opened ${URL} to add \`${IMAGE}\`. The image is being built and validated: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/build.yaml. Merge the pull request to publish it."
+
+      - name: Report a problem with the request
+        if: failure() && steps.generate.outcome == 'failure'
+        run: |
+          {
+            echo "This request could not be turned into an image:"
+            echo
+            echo '```'
+            cat "${RUNNER_TEMP}/error.txt"
+            echo '```'
+            echo
+            echo "Edit the issue, then remove and re-add the \`add-image\` label to try again."
+          } > "${RUNNER_TEMP}/comment.md"
+          gh issue comment "${ISSUE}" --body-file "${RUNNER_TEMP}/comment.md"
