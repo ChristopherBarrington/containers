@@ -4,9 +4,9 @@ Software container images for analysis work. Each image is built by GitHub Actio
 
 ## Available tools
 
-| Tool     | Package |
-| :------- | :------ |
-| None yet |         |
+| Tool     | Tag |
+| :------- | :-- |
+| None yet |     |
 
 Each tool's README describes the tool, lists its tags and gives links and a citation.
 
